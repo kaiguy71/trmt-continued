@@ -47,46 +47,49 @@ public class ErodedGrassBlock extends Block {
         builder.add(FACING, STAGE);
     }
 
+    /** Handles neighbor updates when this block is placed or updated next to another block. */
     @Override
     public void neighborUpdate(BlockState state, World world, BlockPos pos, Block sourceBlock, BlockPos sourcePos, boolean notify) {
         super.neighborUpdate(state, world, pos, sourceBlock, sourcePos, notify);
         if (world.isClient) return;
+        // If the block above is opaque, revert to vanilla grass and clear tracking data.
         if (!world.getBlockState(pos.up()).isOpaque()) return;
         world.setBlockState(pos, Blocks.GRASS_BLOCK.getDefaultState(), Block.NOTIFY_ALL);
         ErosionMapManager.getInstance().removeEntry(pos);
     }
 
+    /** Handles random ticking for erosion simulation (De-erosion). */
     @Override
     public void randomTick(BlockState state, ServerWorld world, BlockPos pos, Random random) {
-        ErosionMapManager manager = ErosionMapManager.getInstance();
-        if (world.getBlockState(pos.up()).isOpaque()) {
-            world.setBlockState(pos, Blocks.GRASS_BLOCK.getDefaultState(), Block.NOTIFY_ALL);
-            manager.removeEntry(pos);
-            return;
-        }
+        // Check if the block above is opaque before proceeding with erosion logic.
+        if (!world.getBlockState(pos.up()).isOpaque()) return;
+
         if (!TRMTConfig.get().deErosion.grassEnabled) return;
-        ChunkErosionMap chunkMap = manager.getChunkMap(new ChunkPos(pos));
+        ChunkErosionMap chunkMap = ErosionMapManager.getInstance().getChunkMap(new ChunkPos(pos));
         ErosionEntry entry = chunkMap != null ? chunkMap.getEntry(pos) : null;
 
         int blockStage = state.get(STAGE);
         long currentTime = world.getTime();
         // Map block STAGE 0–4 to old grass stages 1–5 for the per-stage timeout config.
         long timeout = BlockThresholds.getGrassDeErosionTimeout(blockStage + 1);
-        if (BlockThresholds.isIsolated(world, pos, manager)) timeout /= 2;
+        if (BlockThresholds.isIsolated(world, pos, ErosionMapManager.getInstance())) {
+            timeout /= 2; // Halve timeout if isolated
+        }
+        // Check cooldown period: If current time is before the required time, do nothing.
         if (entry != null && currentTime - entry.getLastTouchedGameTime() <= timeout) return;
+
         long newCooldownTime = (entry != null) ? entry.getLastTouchedGameTime() + timeout : currentTime;
 
         if (blockStage > 0) {
-            world.setBlockState(pos, state.with(STAGE, blockStage - 1), Block.NOTIFY_ALL);
-            manager.removeEntry(pos);
-            manager.writeCooldownEntry(pos, TRMTBlocks.ERODED_GRASS_BLOCK, newCooldownTime);
-            if (random.nextFloat() < 0.05f && world.getBlockState(pos.up()).isAir()) {
-                world.setBlockState(pos.up(), Blocks.GRASS.getDefaultState(), Block.NOTIFY_ALL);
-            }
+            // De-erode: Step down one visual stage, preserving rotation.
+            world.setBlockState(pos, state.with(STAGE, Math.max(0, blockStage - 1)), Block.NOTIFY_ALL);
+            ErosionMapManager.getInstance().removeEntry(pos);
+            // Write the new cooldown time for the next check.
+            ErosionMapManager.getInstance().writeCooldownEntry(pos, TRMTBlocks.ERODED_GRASS_BLOCK, newCooldownTime);
         } else {
-            // Stage 0 → revert to vanilla grass_block.
+            // Stage 0 → revert to vanilla grass block.
             world.setBlockState(pos, Blocks.GRASS_BLOCK.getDefaultState(), Block.NOTIFY_ALL);
-            manager.removeEntry(pos);
+            ErosionMapManager.getInstance().removeEntry(pos);
         }
     }
 }

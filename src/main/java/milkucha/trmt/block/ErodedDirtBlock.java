@@ -6,11 +6,10 @@ import milkucha.trmt.erosion.BlockThresholds;
 import milkucha.trmt.erosion.ChunkErosionMap;
 import milkucha.trmt.erosion.ErosionEntry;
 import milkucha.trmt.erosion.ErosionMapManager;
-import net.minecraft.block.Block;
-import net.minecraft.block.BlockState;
-import net.minecraft.block.Blocks;
-import net.minecraft.block.ShapeContext;
+
+import net.minecraft.item.ItemStack;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.world.BlockView;
 import net.minecraft.world.World;
 import net.minecraft.state.StateManager;
 import net.minecraft.state.property.DirectionProperty;
@@ -21,7 +20,7 @@ import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.util.math.random.Random;
 import net.minecraft.util.shape.VoxelShape;
-import net.minecraft.world.BlockView;
+import net.minecraft.world.WorldAccess;
 
 /**
  * Dirt block produced by foot-traffic erosion.
@@ -45,7 +44,9 @@ public class ErodedDirtBlock extends Block {
 
     public ErodedDirtBlock(Settings settings) {
         super(settings);
-        setDefaultState(getStateManager().getDefaultState().with(FACING, Direction.SOUTH).with(STAGE, 0));
+        setDefaultState(getStateManager().getDefaultState()
+                .with(FACING, Direction.SOUTH)
+                .with(STAGE, 0));
     }
 
     @Override
@@ -53,11 +54,15 @@ public class ErodedDirtBlock extends Block {
         builder.add(FACING, STAGE);
     }
 
+    /** Handles neighbor updates when this block is placed or updated next to another block. */
     @Override
-    public void neighborUpdate(BlockState state, World world, BlockPos pos, Block sourceBlock, BlockPos sourcePos, boolean notify) {
+    public void neighborUpdate(BlockState state, World world, BlockPos pos, net.minecraft.block.Block sourceBlock, BlockPos sourcePos, boolean notify) {
         super.neighborUpdate(state, world, pos, sourceBlock, sourcePos, notify);
         if (world.isClient) return;
+        // Check if the block above is opaque before reverting state
         if (!world.getBlockState(pos.up()).isOpaque()) return;
+
+        // Determine revert state based on adjacent eroded blocks
         BlockState revertTo = state.isOf(TRMTBlocks.ERODED_COARSE_DIRT)
                 ? Blocks.COARSE_DIRT.getDefaultState()
                 : Blocks.DIRT.getDefaultState();
@@ -65,41 +70,39 @@ public class ErodedDirtBlock extends Block {
         ErosionMapManager.getInstance().removeEntry(pos);
     }
 
+    /** Handles random ticking for erosion simulation (De-erosion). */
     @Override
     public void randomTick(BlockState state, ServerWorld world, BlockPos pos, Random random) {
         ErosionMapManager manager = ErosionMapManager.getInstance();
-        if (world.getBlockState(pos.up()).isOpaque()) {
-            BlockState revertTo = state.isOf(TRMTBlocks.ERODED_COARSE_DIRT)
-                    ? Blocks.COARSE_DIRT.getDefaultState()
-                    : Blocks.DIRT.getDefaultState();
-            world.setBlockState(pos, revertTo, Block.NOTIFY_ALL);
-            manager.removeEntry(pos);
-            return;
-        }
+        // Check if the block above is opaque before proceeding with erosion logic
+        if (!world.getBlockState(pos.up()).isOpaque()) return;
+
         if (!TRMTConfig.get().deErosion.dirtEnabled) return;
         ChunkErosionMap chunkMap = manager.getChunkMap(new ChunkPos(pos));
         ErosionEntry entry = chunkMap != null ? chunkMap.getEntry(pos) : null;
 
         long currentTime = world.getTime();
+        // Use BlockThresholds to calculate timeout, assuming it handles the new API structure
         long timeout = BlockThresholds.getDirtDeErosionTimeout(state.getBlock());
         if (BlockThresholds.isIsolated(world, pos, manager)) timeout /= 2;
         if (entry != null && currentTime - entry.getLastTouchedGameTime() <= timeout) return;
+
+        // Calculate new cooldown time for the next tick
         long newCooldownTime = (entry != null) ? entry.getLastTouchedGameTime() + timeout : currentTime;
 
         Direction facing = state.get(FACING);
         Block block = state.getBlock();
 
         if (block == TRMTBlocks.ERODED_COARSE_DIRT) {
-            // De-erode to the most eroded dirt stage.
+            // De-erode to the most eroded dirt stage, preserving rotation.
             world.setBlockState(pos, TRMTBlocks.ERODED_DIRT.getDefaultState().with(FACING, facing).with(STAGE, 3), Block.NOTIFY_ALL);
             manager.removeEntry(pos);
             manager.writeCooldownEntry(pos, TRMTBlocks.ERODED_DIRT, newCooldownTime);
         } else if (block == TRMTBlocks.ERODED_DIRT) {
             int stage = state.get(STAGE);
             if (stage > 0) {
-                // Step down one visual stage.
-                world.setBlockState(pos, state.with(STAGE, stage - 1), Block.NOTIFY_ALL);
-                manager.removeEntry(pos);
+                // Step down one visual stage, preserving rotation.
+                world.setBlockState(pos, state.with(STAGE, Math.max(0, stage - 1)), Block.NOTIFY_ALL);
                 manager.writeCooldownEntry(pos, TRMTBlocks.ERODED_DIRT, newCooldownTime);
             } else {
                 // Stage 0 → revert to eroded grass block at its most-eroded stage, preserving rotation.
@@ -112,15 +115,5 @@ public class ErodedDirtBlock extends Block {
                 manager.writeCooldownEntry(pos, TRMTBlocks.ERODED_GRASS_BLOCK, newCooldownTime);
             }
         }
-    }
-
-    @Override
-    public VoxelShape getOutlineShape(BlockState state, BlockView world, BlockPos pos, ShapeContext context) {
-        return SHAPE;
-    }
-
-    @Override
-    public VoxelShape getCollisionShape(BlockState state, BlockView world, BlockPos pos, ShapeContext context) {
-        return SHAPE;
     }
 }

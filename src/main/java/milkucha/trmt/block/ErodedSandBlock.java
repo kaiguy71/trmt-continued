@@ -6,16 +6,14 @@ import milkucha.trmt.erosion.BlockThresholds;
 import milkucha.trmt.erosion.ChunkErosionMap;
 import milkucha.trmt.erosion.ErosionEntry;
 import milkucha.trmt.erosion.ErosionMapManager;
+
 import net.minecraft.block.Block;
 import net.minecraft.block.BlockState;
 import net.minecraft.block.Blocks;
 import net.minecraft.block.ShapeContext;
-import net.minecraft.block.Waterloggable;
 import net.minecraft.fluid.Fluid;
-import net.minecraft.fluid.FluidState;
 import net.minecraft.fluid.Fluids;
 import net.minecraft.item.ItemStack;
-import net.minecraft.item.Items;
 import net.minecraft.server.world.ServerWorld;
 import net.minecraft.state.StateManager;
 import net.minecraft.state.property.BooleanProperty;
@@ -31,7 +29,7 @@ import net.minecraft.world.BlockView;
 import net.minecraft.world.World;
 import net.minecraft.world.WorldAccess;
 
-public class ErodedSandBlock extends Block implements Waterloggable {
+public class ErodedSandBlock extends Block {
 
     public static final DirectionProperty FACING = Properties.HORIZONTAL_FACING;
     public static final IntProperty STAGE = IntProperty.of("stage", 0, 4);
@@ -42,7 +40,7 @@ public class ErodedSandBlock extends Block implements Waterloggable {
         Block.createCuboidShape(0, 0, 0, 16, 10, 16), // stage 1
         Block.createCuboidShape(0, 0, 0, 16, 10, 16), // stage 2
         Block.createCuboidShape(0, 0, 0, 16, 10, 16), // stage 3
-        Block.createCuboidShape(0, 0, 0, 16, 10, 16), // stage 4
+        Block.createCuboidShape(0, 0, 0, 16, 10, 16)  // stage 4
     };
 
     private static final VoxelShape[] OUTLINE_SHAPES = {
@@ -50,7 +48,7 @@ public class ErodedSandBlock extends Block implements Waterloggable {
         Block.createCuboidShape(0, 0, 0, 16, 14, 16), // stage 1 — matches model height
         Block.createCuboidShape(0, 0, 0, 16, 14, 16), // stage 2 — matches model height
         Block.createCuboidShape(0, 0, 0, 16, 12, 16), // stage 3 — matches model height
-        Block.createCuboidShape(0, 0, 0, 16, 10, 16), // stage 4 — matches model height (same as collision)
+        Block.createCuboidShape(0, 0, 0, 16, 10, 16)  // stage 4 — matches model height (same as collision)
     };
 
     public ErodedSandBlock(Settings settings) {
@@ -63,26 +61,43 @@ public class ErodedSandBlock extends Block implements Waterloggable {
 
     @Override
     protected void appendProperties(StateManager.Builder<Block, BlockState> builder) {
-        builder.add(FACING, STAGE, WATERLOGGED);
+        builder.add(DirectionProperty.field("facing"));
+        // Using IntProperty directly as it's a common pattern for state tracking
+        builder.add(IntProperty.field("erosionLevel", 0)); 
     }
 
-    // --- Waterloggable ---
-
     @Override
-    public FluidState getFluidState(BlockState state) {
+    public BlockState getBlockState(BlockPos pos, World world, BlockState state) {
+        // Ensure the block state reflects the correct facing and stage based on erosion data.
+        ChunkErosionMap chunkMap = ErosionMapManager.getInstance().getChunkMap(new ChunkPos(pos));
+        ErosionEntry entry = chunkMap != null ? chunkMap.getEntry(pos) : null;
+
+        if (entry != null) {
+            return state.with(FACING, entry.getFacing()).with(STAGE, entry.getStage());
+        }
+        return state;
+    }
+
+    // --- Waterloggable Overrides (Modernized for 26.3) ---
+
+    /** Returns the fluid state based on the block's waterlogged property. */
+    @Override
+    public net.minecraft.fluid.FluidState getFluidState(BlockState state) {
         return state.get(WATERLOGGED) ? Fluids.WATER.getStill(false) : super.getFluidState(state);
     }
 
-    /** Only sunken stages (1–4) can be waterlogged; stage 0 is full-height and needs no fill. */
+    /** Checks if the block can be filled with a fluid (only sunken stages). */
     @Override
     public boolean canFillWithFluid(BlockView world, BlockPos pos, BlockState state, Fluid fluid) {
         return state.get(STAGE) > 0 && !state.get(WATERLOGGED) && fluid == Fluids.WATER;
     }
 
+    /** Attempts to fill the block with water and schedules a tick. */
     @Override
-    public boolean tryFillWithFluid(WorldAccess world, BlockPos pos, BlockState state, FluidState fluidState) {
+    public boolean tryFillWithFluid(WorldAccess world, BlockPos pos, BlockState state, net.minecraft.fluid.FluidState fluidState) {
         if (state.get(STAGE) > 0 && !state.get(WATERLOGGED)) {
             if (!world.isClient()) {
+                // Set the block state and schedule a tick to propagate fluids correctly.
                 world.setBlockState(pos, state.with(WATERLOGGED, true), Block.NOTIFY_ALL);
                 world.scheduleFluidTick(pos, fluidState.getFluid(), fluidState.getFluid().getTickRate(world));
             }
@@ -91,16 +106,33 @@ public class ErodedSandBlock extends Block implements Waterloggable {
         return false;
     }
 
+    /** Attempts to drain water from the block. */
     @Override
     public ItemStack tryDrainFluid(WorldAccess world, BlockPos pos, BlockState state) {
         if (state.get(STAGE) > 0 && state.get(WATERLOGGED)) {
             world.setBlockState(pos, state.with(WATERLOGGED, false), Block.NOTIFY_ALL);
-            return new ItemStack(Items.WATER_BUCKET);
+            return new ItemStack(net.minecraft.item.Items.WATER_BUCKET);
         }
         return ItemStack.EMPTY;
     }
 
-    /** Keep water ticking while this block is waterlogged so fluid propagation stays correct. */
+    /** Schedules fluid ticking when the block is waterlogged. */
+    @Override
+    public void tickFluid(BlockState state, WorldAccess world, BlockPos pos, BlockView view) {
+        if (state.get(WATERLOGGED)) {
+            world.scheduleFluidTick(pos, Fluids.WATER, 1);
+        }
+    }
+
+    /** Schedules fluid ticking when the block is waterlogged (Overload for compatibility). */
+    @Override
+    public void tickFluid(BlockState state, WorldAccess world, BlockPos pos, BlockView view) {
+        if (state.get(WATERLOGGED)) {
+            world.scheduleFluidTick(pos, Fluids.WATER, 1);
+        }
+    }
+
+    /** Handles fluid ticking during neighbor updates. */
     @Override
     public BlockState getStateForNeighborUpdate(BlockState state, Direction direction, BlockState neighborState,
                                                 WorldAccess world, BlockPos pos, BlockPos neighborPos) {
@@ -110,45 +142,54 @@ public class ErodedSandBlock extends Block implements Waterloggable {
         return super.getStateForNeighborUpdate(state, direction, neighborState, world, pos, neighborPos);
     }
 
-    // --- Block overrides ---
+    // --- Block Overrides (Lifecycle) ---
 
     @Override
-    public void neighborUpdate(BlockState state, World world, BlockPos pos, Block sourceBlock, BlockPos sourcePos, boolean notify) {
+    public void neighborUpdate(BlockState state, World world, BlockPos pos, net.minecraft.block.Block sourceBlock, BlockPos sourcePos, boolean notify) {
         super.neighborUpdate(state, world, pos, sourceBlock, sourcePos, notify);
         if (world.isClient) return;
-        if (!world.getBlockState(pos.up()).isOpaque()) return;
+        // Only react if the block above is opaque and we are not in a client context.
+        if (!world.getBlockState(pos.up()).isOpaque()) return; 
+        
+        // Reset to base sand state upon neighbor interaction, simulating removal of erosion effect.
         world.setBlockState(pos, Blocks.SAND.getDefaultState(), Block.NOTIFY_ALL);
         ErosionMapManager.getInstance().removeEntry(pos);
     }
 
     @Override
     public void randomTick(BlockState state, ServerWorld world, BlockPos pos, Random random) {
-        ErosionMapManager manager = ErosionMapManager.getInstance();
-        if (world.getBlockState(pos.up()).isOpaque()) {
-            world.setBlockState(pos, Blocks.SAND.getDefaultState(), Block.NOTIFY_ALL);
-            manager.removeEntry(pos);
-            return;
-        }
+        // Check if the block above is opaque (i.e., not air/empty space).
+        if (!world.getBlockState(pos.up()).isOpaque()) return;
+
         if (!TRMTConfig.get().deErosion.sandEnabled) return;
-        ChunkErosionMap chunkMap = manager.getChunkMap(new ChunkPos(pos));
+        
+        ChunkErosionMap chunkMap = ErosionMapManager.getInstance().getChunkMap(new ChunkPos(pos));
         ErosionEntry entry = chunkMap != null ? chunkMap.getEntry(pos) : null;
 
         int stage = state.get(STAGE);
         long currentTime = world.getTime();
+        // Determine the required cooldown time based on current stage.
         long timeout = BlockThresholds.getSandDeErosionTimeout(stage);
-        if (BlockThresholds.isIsolated(world, pos, manager)) timeout /= 2;
-        if (entry != null && currentTime - entry.getLastTouchedGameTime() <= timeout) return;
-        long newCooldownTime = (entry != null) ? entry.getLastTouchedGameTime() + timeout : currentTime;
+        if (BlockThresholds.isIsolated(world, pos, ErosionMapManager.getInstance())) {
+            timeout /= 2; // Halve timeout if isolated
+        }
+        
+        // Check if the cooldown period has passed since last touch/check.
+        long requiredTime = (entry != null) ? entry.getLastTouchedGameTime() + timeout : currentTime;
+        if (currentTime < requiredTime) return;
 
+        // --- Erosion Logic ---
         if (stage > 0) {
-            // Preserve WATERLOGGED for stages that remain sunken (> 1); drop it at stage 0 (full height).
+            // De-erode: Move to the previous stage, preserving waterlogged state if it was sunken enough.
             boolean keepWaterlogged = stage > 1 && state.get(WATERLOGGED);
-            world.setBlockState(pos, state.with(STAGE, stage - 1).with(WATERLOGGED, keepWaterlogged), Block.NOTIFY_ALL);
-            manager.removeEntry(pos);
-            manager.writeCooldownEntry(pos, TRMTBlocks.ERODED_SAND, newCooldownTime);
+            world.setBlockState(pos, state.with(STAGE, Math.max(0, stage - 1)).with(WATERLOGGED, keepWaterlogged), Block.NOTIFY_ALL);
+            ErosionMapManager.getInstance().removeEntry(pos);
+            // Write the new cooldown time for the next check.
+            ErosionMapManager.getInstance().writeCooldownEntry(pos, TRMTBlocks.ERODED_SAND, currentTime);
         } else {
+            // If stage is 0 (full height), revert to vanilla sand and clear tracking data.
             world.setBlockState(pos, Blocks.SAND.getDefaultState(), Block.NOTIFY_ALL);
-            manager.removeEntry(pos);
+            ErosionMapManager.getInstance().removeEntry(pos);
         }
     }
 

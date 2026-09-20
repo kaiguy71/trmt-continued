@@ -1,31 +1,26 @@
 package milkucha.trmt.erosion;
 
-import milkucha.trmt.TRMT;
 import milkucha.trmt.TRMTBlocks;
-import milkucha.trmt.block.ErodedGrassBlock;
-import milkucha.trmt.network.TRMTPackets;
-import net.fabricmc.fabric.api.networking.v1.PacketByteBufs;
-import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import milkucha.trmt.TRMTConfig;
 import net.minecraft.block.Block;
 import net.minecraft.block.Blocks;
 import net.minecraft.network.PacketByteBuf;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.network.ServerPlayerEntity;
 import net.minecraft.server.world.ServerWorld;
+import net.minecraft.state.property.Properties;
 import net.minecraft.util.math.BlockPos;
 import net.minecraft.util.math.ChunkPos;
 import net.minecraft.util.math.Direction;
 import net.minecraft.world.World;
 import net.minecraft.world.chunk.ChunkStatus;
 
-import java.util.HashSet;
-import java.util.Set;
-
 import java.util.ArrayList;
-import java.util.List;
-
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * Server-side singleton that holds all per-chunk erosion maps for the current world session.
@@ -60,7 +55,7 @@ public class ErosionMapManager {
         INSTANCE = null;
     }
 
-    // --- Erosion logic ---
+    // --- Core Erosion Logic ---
 
     /**
      * Records one step at worldPos for the given block type.
@@ -89,9 +84,11 @@ public class ErosionMapManager {
         ErosionEntry entry = map.getEntry(pos);
         if (entry == null) return;
         int stage = entry.getErosionStage();
-        if (stage == 0 && block == Blocks.GRASS_BLOCK) return; // pristine grass — no HUD entry yet
-        if (stage == 0) stage = 1; // sentinel for non-grass tracked blocks
-        broadcastStageUpdate(pos, stage, entry.getWalkedOnCount(), entry.getThreshold(), entry.getLastTouchedGameTime());
+        // Sentinel check: If it's grass and stage is 0, assume pristine and do nothing.
+        if (stage == 0 && block == Blocks.GRASS_BLOCK) return; 
+        // For all other tracked blocks, use a minimum sentinel stage of 1 if the entry exists but stage is 0.
+        int displayStage = (stage == 0) ? 1 : stage; 
+        broadcastStageUpdate(pos, displayStage, entry.getWalkedOnCount(), entry.getThreshold(), entry.getLastTouchedGameTime());
     }
 
     /**
@@ -107,6 +104,7 @@ public class ErosionMapManager {
         map.removeEntry(worldPos);
         state.removeChunkMapIfEmpty(chunkPos);
         state.markDirty();
+        // Broadcast stage 0 to signal clients to clear the entry for this position.
         broadcastStageUpdate(worldPos, 0, 0f, 0f, 0L);
     }
 
@@ -142,6 +140,7 @@ public class ErosionMapManager {
         if (map == null) return;
         ErosionEntry entry = map.getEntry(worldPos);
         if (entry == null) return;
+        // The actual reversion logic is handled by the block class, this just updates the state tracking.
         entry.revertGrassStage(BlockThresholds.randomThreshold(Blocks.GRASS_BLOCK), currentGameTime);
         state.markDirty();
     }
@@ -192,6 +191,7 @@ public class ErosionMapManager {
         for (ChunkErosionMap chunk : state.getAllChunkMaps().values()) {
             for (Map.Entry<BlockPos, ErosionEntry> e : chunk.getEntries().entrySet()) {
                 ErosionEntry entry = e.getValue();
+                // Check for the specific pattern of old grass proxy entries that need migration.
                 if (entry.getTrackedBlock() == Blocks.GRASS_BLOCK && entry.getErosionStage() > 0) {
                     candidates.add(e.getKey());
                 }
@@ -208,6 +208,7 @@ public class ErosionMapManager {
             ErosionEntry entry = chunk.getEntry(pos);
             if (entry == null) continue;
 
+            // Only process if the block at this position is still grass, indicating it hasn't been processed yet.
             if (!world.getBlockState(pos).isOf(Blocks.GRASS_BLOCK)) {
                 removeEntry(pos);
                 continue;
@@ -215,6 +216,7 @@ public class ErosionMapManager {
 
             int stage = entry.getErosionStage() - 1; // old stages 1–5 → new STAGE 0–4
             Direction facing = facingFromPos(pos);
+            // Place the modern, directional block state.
             world.setBlockState(pos,
                     TRMTBlocks.ERODED_GRASS_BLOCK.getDefaultState()
                             .with(ErodedGrassBlock.FACING, facing)
@@ -231,11 +233,12 @@ public class ErosionMapManager {
     }
 
     private static Direction facingFromPos(BlockPos pos) {
+        // Determines the direction based on the block's position relative to cardinal directions.
         return switch (BlockThresholds.posRotation(pos)) {
-            case 1  -> Direction.WEST;
-            case 2  -> Direction.NORTH;
-            case 3  -> Direction.EAST;
-            default -> Direction.SOUTH;
+            case 1  -> Direction.WEST; // West face
+            case 2  -> Direction.NORTH; // North face
+            case 3  -> Direction.EAST;  // East face
+            default -> Direction.SOUTH; // Default/South face
         };
     }
 
@@ -245,48 +248,38 @@ public class ErosionMapManager {
      */
     public void convertAllErodedToVanilla(MinecraftServer server) {
         if (state == null) return;
-        int viewDistance = server.getPlayerManager().getViewDistance();
-        for (ServerWorld world : server.getWorlds()) {
-            Set<ChunkPos> scanned = new HashSet<>();
-            for (ServerPlayerEntity player : world.getPlayers()) {
-                ChunkPos playerChunk = player.getChunkPos();
-                for (int dx = -viewDistance; dx <= viewDistance; dx++) {
-                    for (int dz = -viewDistance; dz <= viewDistance; dz++) {
-                        ChunkPos cp = new ChunkPos(playerChunk.x + dx, playerChunk.z + dz);
-                        if (scanned.add(cp) && world.getChunk(cp.x, cp.z, ChunkStatus.FULL, false) != null) {
-                            convertChunkToVanilla(world, cp);
-                        }
-                    }
-                }
-            }
+        ServerWorld world = server.getWorld(World.OVERWORLD);
+        if (world == null) return;
+
+        // Iterate over all chunks currently tracked for erosion data.
+        Set<ChunkPos> chunkPositionsToProcess = new HashSet<>(state.getAllChunkMaps().keySet());
+
+        for (ChunkPos chunkPos : chunkPositionsToProcess) {
+            convertChunkToVanilla(world, chunkPos);
         }
     }
 
     private void convertChunkToVanilla(ServerWorld world, ChunkPos chunkPos) {
-        int startX = chunkPos.getStartX();
-        int startZ = chunkPos.getStartZ();
-        int minY   = world.getBottomY();
-        int maxY   = world.getTopY();
+        // Iterate over the 16x16 area of the chunk.
+        for (int x = chunkPos.getStartX(); x < chunkPos.getEndX() + 1; x++) {
+            for (int z = chunkPos.getStartZ(); z < chunkPos.getEndZ() + 1; z++) {
+                // Iterate over a reasonable height range, assuming the world is loaded enough to check blocks.
+                for (int y = world.getBottomY(); y <= world.getTopY(); y++) {
+                    BlockPos pos = new BlockPos(x, y, z);
+                    Block block = world.getBlockState(pos).getBlock();
 
-        BlockPos.Mutable mutable = new BlockPos.Mutable();
-        for (int x = startX; x < startX + 16; x++) {
-            for (int z = startZ; z < startZ + 16; z++) {
-                for (int y = minY; y < maxY; y++) {
-                    mutable.set(x, y, z);
-                    Block block = world.getBlockState(mutable).getBlock();
-                    BlockPos immutable = mutable.toImmutable();
                     if (block == TRMTBlocks.ERODED_GRASS_BLOCK) {
-                        world.setBlockState(immutable, Blocks.GRASS_BLOCK.getDefaultState(), Block.NOTIFY_ALL);
-                        removeEntry(immutable);
+                        world.setBlockState(pos, Blocks.GRASS_BLOCK.getDefaultState(), Block.NOTIFY_ALL);
+                        removeEntry(pos);
                     } else if (block == TRMTBlocks.ERODED_DIRT) {
-                        world.setBlockState(immutable, Blocks.DIRT.getDefaultState(), Block.NOTIFY_ALL);
-                        removeEntry(immutable);
+                        world.setBlockState(pos, Blocks.DIRT.getDefaultState(), Block.NOTIFY_ALL);
+                        removeEntry(pos);
                     } else if (block == TRMTBlocks.ERODED_COARSE_DIRT) {
-                        world.setBlockState(immutable, Blocks.COARSE_DIRT.getDefaultState(), Block.NOTIFY_ALL);
-                        removeEntry(immutable);
+                        world.setBlockState(pos, Blocks.COARSE_DIRT.getDefaultState(), Block.NOTIFY_ALL);
+                        removeEntry(pos);
                     } else if (block == TRMTBlocks.ERODED_SAND) {
-                        world.setBlockState(immutable, Blocks.SAND.getDefaultState(), Block.NOTIFY_ALL);
-                        removeEntry(immutable);
+                        world.setBlockState(pos, Blocks.SAND.getDefaultState(), Block.NOTIFY_ALL);
+                        removeEntry(pos);
                     }
                 }
             }

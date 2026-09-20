@@ -46,16 +46,22 @@ public abstract class DisconnectedScreenMixin extends Screen {
         }
     }
 
-    // Sync position to the back button every frame so any resize is corrected immediately.
-    @Inject(method = "render", at = @At("HEAD"))
-    private void trmt$syncButtonPosition(DrawContext context, int mouseX, int mouseY, float delta, CallbackInfo ci) {
-        if (trmt$downloadButton == null) return;
+    @Inject(method = "init()V", at = @At("TAIL"))
+    private void trmt$addUpdateButton(CallbackInfo ci) {
+        trmt$downloadButton = null;
+        if (this.reason == null
+                || !(this.reason.getContent() instanceof TranslatableTextContent tc)
+                || !tc.getKey().startsWith("trmt.disconnect")) return;
         for (Element child : this.children()) {
-            if (child instanceof ButtonWidget backBtn && backBtn != trmt$downloadButton) {
-                ((ClickableWidgetPositionAccessor) trmt$downloadButton).trmt$setX(backBtn.getX());
-                ((ClickableWidgetPositionAccessor) trmt$downloadButton).trmt$setY(backBtn.getY() + 25);
-                return;
-            }
+            if (!(child instanceof ButtonWidget backBtn)) continue;
+            trmt$downloadButton = this.addDrawableChild(
+                ButtonWidget.builder(
+                    Text.translatable("trmt.button.download_update"),
+                    btn -> Util.getOperatingSystem().open(URI.create(TRMTPackets.MODRINTH_URL))
+                ).dimensions(backBtn.getX(), backBtn.getY() + 25, backBtn.getWidth(), 20).build()
+            );
+            return;
         }
     }
+}
 }
