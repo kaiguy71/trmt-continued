@@ -81,7 +81,8 @@ public class ErodedSandBlock extends Block implements SimpleWaterloggedBlock {
         return state.getValue(WATERLOGGED) ? Fluids.WATER.getSource(false) : super.getFluidState(state);
     }
 
-    /** Checks if the block can be filled with a fluid (only sunken stages). */
+    /** Checks if the block can be filled with a fluid (only sunken stages).
+     *  26.3: BucketPickup/LiquidBlockContainer now take LivingEntity instead of Player. */
     @Override
     public boolean canPlaceLiquid(@Nullable LivingEntity player, BlockGetter level, BlockPos pos, BlockState state, Fluid fluid) {
         return state.getValue(STAGE) > 0 && !state.getValue(WATERLOGGED) && fluid == Fluids.WATER;
@@ -123,6 +124,7 @@ public class ErodedSandBlock extends Block implements SimpleWaterloggedBlock {
 
     // --- Block Overrides (Lifecycle) ---
 
+    /** 26.3: neighborChanged's 5th parameter changed from a source BlockPos to a nullable Orientation. */
     @Override
     protected void neighborChanged(BlockState state, Level level, BlockPos pos, Block sourceBlock, net.minecraft.world.level.redstone.Orientation orientation, boolean notify) {
         super.neighborChanged(state, level, pos, sourceBlock, orientation, notify);

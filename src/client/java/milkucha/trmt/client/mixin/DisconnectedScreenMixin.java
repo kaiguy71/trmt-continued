@@ -21,6 +21,8 @@ import java.net.URI;
 @Mixin(DisconnectedScreen.class)
 public abstract class DisconnectedScreenMixin extends Screen {
 
+    // 26.3: DisconnectedScreen no longer stores a plain "reason" Component field; the disconnect
+    // reason is now wrapped in a DisconnectionDetails record, accessed via details.reason().
     @Shadow private DisconnectionDetails details;
     @Unique private Button trmt$downloadButton;
 
@@ -39,6 +41,7 @@ public abstract class DisconnectedScreenMixin extends Screen {
             trmt$downloadButton = this.addRenderableWidget(
                 Button.builder(
                     Component.translatable("trmt.button.download_update"),
+                    // 26.3: Util.getPlatform().openUri(URI) was removed; use Blaze3D.openUri(URI) instead.
                     btn -> Blaze3D.openUri(URI.create(TRMTPackets.MODRINTH_URL))
                 ).bounds(backBtn.getX(), backBtn.getY() + 25, backBtn.getWidth(), 20).build()
             );

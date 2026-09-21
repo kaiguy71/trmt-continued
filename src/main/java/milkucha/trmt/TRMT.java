@@ -46,6 +46,7 @@ public class TRMT implements ModInitializer {
         BlockTransformers.register();
 
         // Register our custom play-phase payload types so they can be (de)serialized on both sides.
+        // 26.3: PayloadTypeRegistry.playS2C() was renamed to clientboundPlay().
         PayloadTypeRegistry.clientboundPlay().register(SyncChunkPayload.TYPE, SyncChunkPayload.CODEC);
         PayloadTypeRegistry.clientboundPlay().register(UpdateStagePayload.TYPE, UpdateStagePayload.CODEC);
 
@@ -82,6 +83,7 @@ public class TRMT implements ModInitializer {
 
         // During login, send server version; disconnect client if its version is older.
         ServerLoginConnectionEvents.QUERY_START.register((handler, server, sender, synchronizer) -> {
+            // 26.3: PacketByteBufs.create() was removed; wrap a fresh Netty buffer directly instead.
             FriendlyByteBuf buf = new FriendlyByteBuf(io.netty.buffer.Unpooled.buffer());
             buf.writeUtf(getModVersion());
             sender.sendPacket(TRMTPackets.VERSION_CHECK, buf);

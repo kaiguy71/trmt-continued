@@ -63,7 +63,10 @@ public class ErodedDirtBlock extends Block {
         builder.add(FACING, STAGE);
     }
 
-    /** Handles neighbor updates when this block is placed or updated next to another block. */
+    /**
+     * Handles neighbor updates when this block is placed or updated next to another block.
+     * 26.3: the 5th parameter changed from a source BlockPos to a nullable Orientation.
+     */
     @Override
     protected void neighborChanged(BlockState state, Level level, BlockPos pos, Block sourceBlock, net.minecraft.world.level.redstone.Orientation orientation, boolean notify) {
         super.neighborChanged(state, level, pos, sourceBlock, orientation, notify);

@@ -11,8 +11,8 @@ import net.minecraft.world.level.block.Blocks;
  * that tilling/flattening/stripping moved to the data-driven block-transformer system.
  *
  * <p>Erosion-tracking cleanup for the resulting block change is handled by
- * {@code ErodedGrassBlock#onRemove}/{@code ErodedDirtBlock#onRemove}, since the block-transformer
- * system itself has no post-transform callback hook.
+ * {@code ErodedGrassBlock#affectNeighborsAfterRemoval}/{@code ErodedDirtBlock#affectNeighborsAfterRemoval},
+ * since the block-transformer system itself has no post-transform callback hook.
  */
 public final class BlockTransformers {
 

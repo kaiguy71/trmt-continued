@@ -25,6 +25,8 @@ import java.util.Map;
 public class ErosionPersistentState extends SavedData {
 
     private static final String DATA_KEY = "trmt_erosion";
+    // 26.3: SavedDataType now keys its storage by Identifier rather than a raw String, and
+    // Identifier.of(namespace, path) was replaced by fromNamespaceAndPath.
     private static final Identifier DATA_ID = Identifier.fromNamespaceAndPath(milkucha.trmt.TRMT.MOD_ID, DATA_KEY);
 
     private final Map<ChunkPos, ChunkErosionMap> chunkMaps;
