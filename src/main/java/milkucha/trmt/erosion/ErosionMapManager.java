@@ -1,19 +1,21 @@
 package milkucha.trmt.erosion;
 
+import milkucha.trmt.TRMT;
 import milkucha.trmt.TRMTBlocks;
-import milkucha.trmt.TRMTConfig;
-import net.minecraft.block.Block;
-import net.minecraft.block.Blocks;
-import net.minecraft.network.PacketByteBuf;
+import milkucha.trmt.block.ErodedGrassBlock;
+import milkucha.trmt.network.SyncChunkPayload;
+import milkucha.trmt.network.UpdateStagePayload;
+
+import net.fabricmc.fabric.api.networking.v1.ServerPlayNetworking;
+import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.server.MinecraftServer;
-import net.minecraft.server.network.ServerPlayerEntity;
-import net.minecraft.server.world.ServerWorld;
-import net.minecraft.state.property.Properties;
-import net.minecraft.util.math.BlockPos;
-import net.minecraft.util.math.ChunkPos;
-import net.minecraft.util.math.Direction;
-import net.minecraft.world.World;
-import net.minecraft.world.chunk.ChunkStatus;
+import net.minecraft.server.level.ServerLevel;
+import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.world.level.ChunkPos;
+import net.minecraft.world.level.Level;
+import net.minecraft.world.level.block.Block;
+import net.minecraft.world.level.block.Blocks;
 
 import java.util.ArrayList;
 import java.util.Collections;
@@ -63,10 +65,10 @@ public class ErosionMapManager {
      */
     public void onStep(BlockPos worldPos, Block block, float amount, long currentGameTime) {
         if (state == null) return;
-        ChunkPos chunkPos = new ChunkPos(worldPos);
+        ChunkPos chunkPos = ChunkPos.containing(worldPos);
         ChunkErosionMap map = state.computeChunkMap(chunkPos);
         map.recordStep(worldPos, block, amount, currentGameTime);
-        state.markDirty();
+        state.setDirty();
     }
 
     /**
@@ -79,15 +81,15 @@ public class ErosionMapManager {
      */
     public void broadcastEntryUpdate(BlockPos pos, Block block) {
         if (state == null) return;
-        ChunkErosionMap map = state.getChunkMap(new ChunkPos(pos));
+        ChunkErosionMap map = state.getChunkMap(ChunkPos.containing(pos));
         if (map == null) return;
         ErosionEntry entry = map.getEntry(pos);
         if (entry == null) return;
         int stage = entry.getErosionStage();
         // Sentinel check: If it's grass and stage is 0, assume pristine and do nothing.
-        if (stage == 0 && block == Blocks.GRASS_BLOCK) return; 
+        if (stage == 0 && block == Blocks.GRASS_BLOCK) return;
         // For all other tracked blocks, use a minimum sentinel stage of 1 if the entry exists but stage is 0.
-        int displayStage = (stage == 0) ? 1 : stage; 
+        int displayStage = (stage == 0) ? 1 : stage;
         broadcastStageUpdate(pos, displayStage, entry.getWalkedOnCount(), entry.getThreshold(), entry.getLastTouchedGameTime());
     }
 
@@ -98,12 +100,12 @@ public class ErosionMapManager {
      */
     public void removeEntry(BlockPos worldPos) {
         if (state == null) return;
-        ChunkPos chunkPos = new ChunkPos(worldPos);
+        ChunkPos chunkPos = ChunkPos.containing(worldPos);
         ChunkErosionMap map = state.getChunkMap(chunkPos);
         if (map == null) return;
         map.removeEntry(worldPos);
         state.removeChunkMapIfEmpty(chunkPos);
-        state.markDirty();
+        state.setDirty();
         // Broadcast stage 0 to signal clients to clear the entry for this position.
         broadcastStageUpdate(worldPos, 0, 0f, 0f, 0L);
     }
@@ -114,7 +116,7 @@ public class ErosionMapManager {
      */
     public void markForRerender(BlockPos pos) {
         if (state == null) return;
-        ChunkErosionMap map = state.getChunkMap(new ChunkPos(pos));
+        ChunkErosionMap map = state.getChunkMap(ChunkPos.containing(pos));
         if (map == null) return;
         ErosionEntry entry = map.getEntry(pos);
         if (entry == null) return;
@@ -136,13 +138,13 @@ public class ErosionMapManager {
      */
     public void revertGrassStage(BlockPos worldPos, long currentGameTime) {
         if (state == null) return;
-        ChunkErosionMap map = state.getChunkMap(new ChunkPos(worldPos));
+        ChunkErosionMap map = state.getChunkMap(ChunkPos.containing(worldPos));
         if (map == null) return;
         ErosionEntry entry = map.getEntry(worldPos);
         if (entry == null) return;
         // The actual reversion logic is handled by the block class, this just updates the state tracking.
         entry.revertGrassStage(BlockThresholds.randomThreshold(Blocks.GRASS_BLOCK), currentGameTime);
-        state.markDirty();
+        state.setDirty();
     }
 
     /**
@@ -153,11 +155,11 @@ public class ErosionMapManager {
      */
     public void writeErodedGrassCooldownEntry(BlockPos worldPos, int stage, long currentGameTime) {
         if (state == null) return;
-        ChunkPos chunkPos = new ChunkPos(worldPos);
+        ChunkPos chunkPos = ChunkPos.containing(worldPos);
         ChunkErosionMap map = state.computeChunkMap(chunkPos);
         float threshold = BlockThresholds.randomThreshold(Blocks.GRASS_BLOCK);
-        map.putEntry(worldPos.toImmutable(), new ErosionEntry(Blocks.GRASS_BLOCK, threshold, 0f, currentGameTime, stage));
-        state.markDirty();
+        map.putEntry(worldPos.immutable(), new ErosionEntry(Blocks.GRASS_BLOCK, threshold, 0f, currentGameTime, stage));
+        state.setDirty();
     }
 
     /**
@@ -167,23 +169,23 @@ public class ErosionMapManager {
      */
     public void writeCooldownEntry(BlockPos worldPos, Block block, long currentGameTime) {
         if (state == null) return;
-        ChunkPos chunkPos = new ChunkPos(worldPos);
+        ChunkPos chunkPos = ChunkPos.containing(worldPos);
         ChunkErosionMap map = state.computeChunkMap(chunkPos);
         float threshold = BlockThresholds.randomThreshold(block);
-        map.putEntry(worldPos.toImmutable(), new ErosionEntry(block, threshold, 0f, currentGameTime));
-        state.markDirty();
+        map.putEntry(worldPos.immutable(), new ErosionEntry(block, threshold, 0f, currentGameTime));
+        state.setDirty();
     }
 
     /**
      * One-time migration: converts legacy ErosionEntry records that used to drive the
-     * client-side proxy model (trackedBlock=GRASS_BLOCK, erosionStage 1–5) into real
+     * client-side proxy model (trackedBlock=GRASS_BLOCK, erosionStage 1-5) into real
      * ERODED_GRASS_BLOCK placements with the equivalent STAGE and FACING.
-     * Safe to call on every server start — entries that have already been migrated won't
+     * Safe to call on every server start - entries that have already been migrated won't
      * match the criteria and are silently skipped.
      */
     public void migrateGrassEntries(MinecraftServer server) {
         if (state == null) return;
-        ServerWorld world = server.getWorld(World.OVERWORLD);
+        ServerLevel world = server.overworld();
         if (world == null) return;
 
         // Collect candidate positions first (getEntries returns an unmodifiable view).
@@ -200,28 +202,28 @@ public class ErosionMapManager {
 
         if (candidates.isEmpty()) return;
 
-        long currentTime = world.getTime();
+        long currentTime = world.getGameTime();
         int migrated = 0;
         for (BlockPos pos : candidates) {
-            ChunkErosionMap chunk = state.getChunkMap(new ChunkPos(pos));
+            ChunkErosionMap chunk = state.getChunkMap(ChunkPos.containing(pos));
             if (chunk == null) continue;
             ErosionEntry entry = chunk.getEntry(pos);
             if (entry == null) continue;
 
             // Only process if the block at this position is still grass, indicating it hasn't been processed yet.
-            if (!world.getBlockState(pos).isOf(Blocks.GRASS_BLOCK)) {
+            if (!world.getBlockState(pos).is(Blocks.GRASS_BLOCK)) {
                 removeEntry(pos);
                 continue;
             }
 
-            int stage = entry.getErosionStage() - 1; // old stages 1–5 → new STAGE 0–4
+            int stage = entry.getErosionStage() - 1; // old stages 1-5 -> new STAGE 0-4
             Direction facing = facingFromPos(pos);
             // Place the modern, directional block state.
-            world.setBlockState(pos,
-                    TRMTBlocks.ERODED_GRASS_BLOCK.getDefaultState()
-                            .with(ErodedGrassBlock.FACING, facing)
-                            .with(ErodedGrassBlock.STAGE, stage),
-                    Block.NOTIFY_ALL);
+            world.setBlock(pos,
+                    TRMTBlocks.ERODED_GRASS_BLOCK.defaultBlockState()
+                            .setValue(ErodedGrassBlock.FACING, facing)
+                            .setValue(ErodedGrassBlock.STAGE, stage),
+                    Block.UPDATE_ALL);
             removeEntry(pos);
             writeCooldownEntry(pos, TRMTBlocks.ERODED_GRASS_BLOCK, currentTime);
             migrated++;
@@ -248,7 +250,7 @@ public class ErosionMapManager {
      */
     public void convertAllErodedToVanilla(MinecraftServer server) {
         if (state == null) return;
-        ServerWorld world = server.getWorld(World.OVERWORLD);
+        ServerLevel world = server.overworld();
         if (world == null) return;
 
         // Iterate over all chunks currently tracked for erosion data.
@@ -259,26 +261,26 @@ public class ErosionMapManager {
         }
     }
 
-    private void convertChunkToVanilla(ServerWorld world, ChunkPos chunkPos) {
+    private void convertChunkToVanilla(ServerLevel world, ChunkPos chunkPos) {
         // Iterate over the 16x16 area of the chunk.
-        for (int x = chunkPos.getStartX(); x < chunkPos.getEndX() + 1; x++) {
-            for (int z = chunkPos.getStartZ(); z < chunkPos.getEndZ() + 1; z++) {
+        for (int x = chunkPos.getMinBlockX(); x < chunkPos.getMaxBlockX() + 1; x++) {
+            for (int z = chunkPos.getMinBlockZ(); z < chunkPos.getMaxBlockZ() + 1; z++) {
                 // Iterate over a reasonable height range, assuming the world is loaded enough to check blocks.
-                for (int y = world.getBottomY(); y <= world.getTopY(); y++) {
+                for (int y = world.getMinY(); y <= world.getMaxY(); y++) {
                     BlockPos pos = new BlockPos(x, y, z);
                     Block block = world.getBlockState(pos).getBlock();
 
                     if (block == TRMTBlocks.ERODED_GRASS_BLOCK) {
-                        world.setBlockState(pos, Blocks.GRASS_BLOCK.getDefaultState(), Block.NOTIFY_ALL);
+                        world.setBlock(pos, Blocks.GRASS_BLOCK.defaultBlockState(), Block.UPDATE_ALL);
                         removeEntry(pos);
                     } else if (block == TRMTBlocks.ERODED_DIRT) {
-                        world.setBlockState(pos, Blocks.DIRT.getDefaultState(), Block.NOTIFY_ALL);
+                        world.setBlock(pos, Blocks.DIRT.defaultBlockState(), Block.UPDATE_ALL);
                         removeEntry(pos);
                     } else if (block == TRMTBlocks.ERODED_COARSE_DIRT) {
-                        world.setBlockState(pos, Blocks.COARSE_DIRT.getDefaultState(), Block.NOTIFY_ALL);
+                        world.setBlock(pos, Blocks.COARSE_DIRT.defaultBlockState(), Block.UPDATE_ALL);
                         removeEntry(pos);
                     } else if (block == TRMTBlocks.ERODED_SAND) {
-                        world.setBlockState(pos, Blocks.SAND.getDefaultState(), Block.NOTIFY_ALL);
+                        world.setBlock(pos, Blocks.SAND.defaultBlockState(), Block.UPDATE_ALL);
                         removeEntry(pos);
                     }
                 }
@@ -304,39 +306,29 @@ public class ErosionMapManager {
      * Sends the full erosion data for every known chunk to a newly-joined player.
      * One SYNC_CHUNK packet per non-empty chunk.
      */
-    public void sendFullSyncToPlayer(ServerPlayerEntity player) {
+    public void sendFullSyncToPlayer(ServerPlayer player) {
         if (state == null) return;
         for (Map.Entry<ChunkPos, ChunkErosionMap> chunkEntry : state.getAllChunkMaps().entrySet()) {
             ChunkPos chunkPos = chunkEntry.getKey();
             Map<BlockPos, ErosionEntry> entries = chunkEntry.getValue().getEntries();
             if (entries.isEmpty()) continue;
 
-            PacketByteBuf buf = PacketByteBufs.create();
-            buf.writeInt(chunkPos.x);
-            buf.writeInt(chunkPos.z);
-            buf.writeInt(entries.size());
+            List<SyncChunkPayload.Entry> payloadEntries = new ArrayList<>(entries.size());
             for (Map.Entry<BlockPos, ErosionEntry> e : entries.entrySet()) {
-                buf.writeBlockPos(e.getKey());
-                buf.writeInt(e.getValue().getErosionStage());
-                buf.writeFloat(e.getValue().getWalkedOnCount());
-                buf.writeFloat(e.getValue().getThreshold());
-                buf.writeLong(e.getValue().getLastTouchedGameTime());
+                payloadEntries.add(new SyncChunkPayload.Entry(
+                        e.getKey(), e.getValue().getErosionStage(), e.getValue().getWalkedOnCount(),
+                        e.getValue().getThreshold(), e.getValue().getLastTouchedGameTime()));
             }
-            ServerPlayNetworking.send(player, TRMTPackets.SYNC_CHUNK, buf);
+            ServerPlayNetworking.send(player, new SyncChunkPayload(chunkPos.x(), chunkPos.z(), payloadEntries));
         }
     }
 
     /** Broadcasts a single-block stage update to every connected player. */
     private void broadcastStageUpdate(BlockPos pos, int stage, float walkedOnCount, float threshold, long lastTouchedGameTime) {
         if (server == null) return;
-        for (ServerPlayerEntity player : server.getPlayerManager().getPlayerList()) {
-            PacketByteBuf buf = PacketByteBufs.create();
-            buf.writeBlockPos(pos);
-            buf.writeInt(stage);
-            buf.writeFloat(walkedOnCount);
-            buf.writeFloat(threshold);
-            buf.writeLong(lastTouchedGameTime);
-            ServerPlayNetworking.send(player, TRMTPackets.UPDATE_STAGE, buf);
+        UpdateStagePayload payload = new UpdateStagePayload(pos, stage, walkedOnCount, threshold, lastTouchedGameTime);
+        for (ServerPlayer player : server.getPlayerList().getPlayers()) {
+            ServerPlayNetworking.send(player, payload);
         }
     }
 }

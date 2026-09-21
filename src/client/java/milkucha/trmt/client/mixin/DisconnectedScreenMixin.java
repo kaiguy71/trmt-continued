@@ -1,14 +1,14 @@
 package milkucha.trmt.client.mixin;
 
 import milkucha.trmt.network.TRMTPackets;
-import net.minecraft.client.gui.DrawContext;
-import net.minecraft.client.gui.Element;
-import net.minecraft.client.gui.screen.DisconnectedScreen;
-import net.minecraft.client.gui.screen.Screen;
-import net.minecraft.client.gui.widget.ButtonWidget;
-import net.minecraft.text.Text;
-import net.minecraft.text.TranslatableTextContent;
-import net.minecraft.util.Util;
+import com.mojang.blaze3d.Blaze3D;
+import net.minecraft.client.gui.components.events.GuiEventListener;
+import net.minecraft.client.gui.components.Button;
+import net.minecraft.client.gui.screens.DisconnectedScreen;
+import net.minecraft.client.gui.screens.Screen;
+import net.minecraft.network.DisconnectionDetails;
+import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.contents.TranslatableContents;
 import org.spongepowered.asm.mixin.Mixin;
 import org.spongepowered.asm.mixin.Shadow;
 import org.spongepowered.asm.mixin.Unique;
@@ -21,47 +21,28 @@ import java.net.URI;
 @Mixin(DisconnectedScreen.class)
 public abstract class DisconnectedScreenMixin extends Screen {
 
-    @Shadow private Text reason;
-    @Unique private ButtonWidget trmt$downloadButton;
+    @Shadow private DisconnectionDetails details;
+    @Unique private Button trmt$downloadButton;
 
-    protected DisconnectedScreenMixin(Text title) {
+    protected DisconnectedScreenMixin(Component title) {
         super(title);
     }
 
     @Inject(method = "init()V", at = @At("TAIL"))
     private void trmt$addUpdateButton(CallbackInfo ci) {
         trmt$downloadButton = null;
-        if (this.reason == null
-                || !(this.reason.getContent() instanceof TranslatableTextContent tc)
+        if (this.details == null
+                || !(this.details.reason().getContents() instanceof TranslatableContents tc)
                 || !tc.getKey().startsWith("trmt.disconnect")) return;
-        for (Element child : this.children()) {
-            if (!(child instanceof ButtonWidget backBtn)) continue;
-            trmt$downloadButton = this.addDrawableChild(
-                ButtonWidget.builder(
-                    Text.translatable("trmt.button.download_update"),
-                    btn -> Util.getOperatingSystem().open(URI.create(TRMTPackets.MODRINTH_URL))
-                ).dimensions(backBtn.getX(), backBtn.getY() + 25, backBtn.getWidth(), 20).build()
+        for (GuiEventListener child : this.children()) {
+            if (!(child instanceof Button backBtn)) continue;
+            trmt$downloadButton = this.addRenderableWidget(
+                Button.builder(
+                    Component.translatable("trmt.button.download_update"),
+                    btn -> Blaze3D.openUri(URI.create(TRMTPackets.MODRINTH_URL))
+                ).bounds(backBtn.getX(), backBtn.getY() + 25, backBtn.getWidth(), 20).build()
             );
             return;
         }
     }
-
-    @Inject(method = "init()V", at = @At("TAIL"))
-    private void trmt$addUpdateButton(CallbackInfo ci) {
-        trmt$downloadButton = null;
-        if (this.reason == null
-                || !(this.reason.getContent() instanceof TranslatableTextContent tc)
-                || !tc.getKey().startsWith("trmt.disconnect")) return;
-        for (Element child : this.children()) {
-            if (!(child instanceof ButtonWidget backBtn)) continue;
-            trmt$downloadButton = this.addDrawableChild(
-                ButtonWidget.builder(
-                    Text.translatable("trmt.button.download_update"),
-                    btn -> Util.getOperatingSystem().open(URI.create(TRMTPackets.MODRINTH_URL))
-                ).dimensions(backBtn.getX(), backBtn.getY() + 25, backBtn.getWidth(), 20).build()
-            );
-            return;
-        }
-    }
-}
 }

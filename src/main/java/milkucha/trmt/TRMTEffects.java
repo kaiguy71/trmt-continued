@@ -1,9 +1,7 @@
 package milkucha.trmt;
 
-import net.minecraft.entity.effect.StatusEffect;
-import net.minecraft.registry.Registries;
-import net.minecraft.registry.Registry;
-import net.minecraft.util.Identifier;
+import net.minecraft.core.Holder;
+import net.minecraft.world.effect.MobEffect;
 
 /**
  * Manages the registration of custom status effects.
@@ -12,14 +10,15 @@ import net.minecraft.util.Identifier;
  */
 public final class TRMTEffects {
 
-    // Placeholder: If the effect is purely cosmetic or only used in recipes, it might not need 
+    // Placeholder: If the effect is purely cosmetic or only used in recipes, it might not need
     // programmatic registration if the recipe JSON handles the application.
-    public static final StatusEffect LIGHTNESS = null; // Set to null as a placeholder for data-driven definition
+    // Typed as Holder<MobEffect> since that is what LivingEntity#hasEffect now expects.
+    public static final Holder<MobEffect> LIGHTNESS = null; // Set to null as a placeholder for data-driven definition
 
     private TRMTEffects() {}
 
     /**
-     * This method is kept empty/minimal because all effect definitions are expected 
+     * This method is kept empty/minimal because all effect definitions are expected
      * to be handled by JSON components in the future.
      */
     public static void register() {
